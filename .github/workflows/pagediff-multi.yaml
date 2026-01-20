@@ -1,0 +1,131 @@
+name: Page diff - multi
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 0 * * *"
+
+permissions:
+  contents: write
+
+env:
+  # Format: NAME|URL|XPATH|FILE_PATH_RELATIVE_TO_REPO
+  PAGES: |
+    pharmacy-first|https://www.england.nhs.uk/publication/community-pharmacy-advanced-service-specification-nhs-pharmacy-first-service/|/html/body/main|page-diff/pharmacy-first.html
+    nhse-bgts-lancets|https://www.england.nhs.uk/publication/commissioning-recommendations-blood-glucose-and-ketone-meters-testing-strips-and-lancets/|/html/body/main|page-diff/nhse-bgts-lancets.html
+
+jobs:
+  check-html:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+
+    - name: Run page checks (loop)
+      run: |
+        mkdir -p page-diff
+        while IFS='|' read -r NAME URL XPATH FILE_PATH; do
+          [ -z "$NAME" ] && continue
+          echo "Checking $NAME -> $FILE_PATH"
+
+          python page-diff/check_html.py --url "$URL" --xpath "$XPATH" --file_path "$FILE_PATH" || {
+            echo "Error fetching $NAME"
+            exit 2
+          }
+
+          # Detect whether this file is new or has changed
+          HAS_CHANGED=false
+
+          if ! git ls-files --error-unmatch "$FILE_PATH" >/dev/null 2>&1; then
+            HAS_CHANGED=true
+          elif ! git diff --quiet -- "$FILE_PATH"; then
+            HAS_CHANGED=true
+          fi
+
+          if [ "$HAS_CHANGED" = "true" ]; then
+            echo "Change detected for $NAME"
+            echo "Requesting Wayback Machine save for: $URL"
+            sleep 2
+            curl -sS -I "https://web.archive.org/save/${URL}"
+          fi
+
+        done <<< "${PAGES}"
+
+    - name: Debug git state (optional)
+      run: |
+        echo "=== git status ==="
+        git status
+        echo "=== git status --porcelain ==="
+        git status --porcelain
+
+    - name: Check for Changes (detect tracked or untracked)
+      id: git-check
+      run: |
+        # If there is any git status output, mark diff
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "GIT_DIFF_EXIT_CODE=1" >> $GITHUB_ENV
+        else
+          echo "No changes detected"
+        fi
+
+    - name: Configure Git
+      if: env.GIT_DIFF_EXIT_CODE == '1'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+
+    - name: Commit and Push Output
+      if: env.GIT_DIFF_EXIT_CODE == '1'
+      run: |
+        # Stage all changes
+        git add -A
+
+        # Create commit message listing changed files
+        CHANGED=$(git status --porcelain | awk '{print $2}' | tr '\n' ' ')
+        if [ -z "$CHANGED" ]; then
+          echo "No changed files to commit"
+          exit 0
+        fi
+
+        git commit -m "Page-diff: update snapshots: ${CHANGED}"
+        git push
+
+    - name: Fail with a message but skip first-time snapshots
+      if: env.GIT_DIFF_EXIT_CODE == '1'
+      run: |
+        # Find changed files from last commit
+        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD || true)
+        # If git diff failed (e.g. there is no HEAD~1), treat carefully:
+        if [ -z "$CHANGED_FILES" ]; then
+          # Fallback to status listing if HEAD~1 not available
+          CHANGED_FILES=$(git status --porcelain | awk '{print $2}' | tr '\n' ' ')
+        fi
+
+        # If any changed file existed in the previous commit, this is a real change -> fail.
+        real_change=false
+        for f in $CHANGED_FILES; do
+          if git show HEAD~1:"$f" >/dev/null 2>&1; then
+            real_change=true
+            break
+          fi
+        done
+
+        if [ "$real_change" = true ]; then
+          echo "Error: Real changes detected in: $CHANGED_FILES"
+          echo "Diff:"
+          git --no-pager diff HEAD~1 HEAD || true
+          exit 1
+        else
+          echo "Initial snapshot(s) detected for: $CHANGED_FILES. Not failing this run."
+        fi
