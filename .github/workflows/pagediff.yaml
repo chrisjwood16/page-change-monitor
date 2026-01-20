@@ -59,10 +59,15 @@ jobs:
     - name: Fail with a message
       if: env.GIT_DIFF_EXIT_CODE == '1'
       run: |
-        DIFF_OUTPUT=$(git diff HEAD~1 HEAD)
-        echo "Error: Changes detected in the last commit:"
-        echo "$DIFF_OUTPUT"
-        exit 1
+        # If the file did not exist in the previous commit, this is the first run
+        if git show HEAD~1:${{ env.FILE_PATH }} >/dev/null 2>&1; then
+          DIFF_OUTPUT=$(git diff HEAD~1 HEAD)
+          echo "Error: Changes detected in the last commit:"
+          echo "$DIFF_OUTPUT"
+          exit 1
+        else
+          echo "Initial snapshot for this page – not failing"
+        fi
 
 
 
