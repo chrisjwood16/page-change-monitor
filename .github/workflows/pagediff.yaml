@@ -39,7 +39,9 @@ jobs:
     - name: Check for Changes
       id: git-check
       run: |
-        git diff --exit-code || echo "GIT_DIFF_EXIT_CODE=1" >> $GITHUB_ENV
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "GIT_DIFF_EXIT_CODE=1" >> $GITHUB_ENV
+        fi
       continue-on-error: true
 
     - name: Configure Git
