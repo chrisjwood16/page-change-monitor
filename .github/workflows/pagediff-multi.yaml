@@ -13,6 +13,8 @@ env:
   PAGES: |
     pharmacy-first|https://www.england.nhs.uk/publication/community-pharmacy-advanced-service-specification-nhs-pharmacy-first-service/|/html/body/main|page-diff/pharmacy-first.html
     nhse-bgts-lancets|https://www.england.nhs.uk/publication/commissioning-recommendations-blood-glucose-and-ketone-meters-testing-strips-and-lancets/|/html/body/main|page-diff/nhse-bgts-lancets.html
+    low-value-medicines|https://www.england.nhs.uk/long-read/items-which-should-not-routinely-be-prescribed-in-primary-care-policy-guidance/|/html/body/main|page-diff/low-value-medicines.html
+    uk-aware|https://www.gov.uk/government/publications/uk-aware-antibiotic-classification/uk-access-watch-reserve-and-other-classification-for-antibiotics-uk-aware-antibiotic-classification|/html/body/main|page-diff/uk-aware.html
 
 jobs:
   check-html:
