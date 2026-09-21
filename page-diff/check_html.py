@@ -19,7 +19,11 @@ FILE_PATH = args.file_path
 def fetch_html_by_xpath(url, xpath):
     response = requests.get(url)
     if response.status_code != 200:
-        raise Exception("Failed to fetch the URL")
+        raise Exception(
+            f"Failed to fetch {url}: "
+            f"HTTP {response.status_code}\n"
+            f"Response: {response.text[:500]}"
+        )
     
     tree = html.fromstring(response.content)
     elements = tree.xpath(xpath)
