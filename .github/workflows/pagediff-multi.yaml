@@ -1,3 +1,4 @@
+
 name: Page diff - multi
 
 on:
@@ -45,39 +46,73 @@ jobs:
           real_change=false
           changed_files=()
           first_snapshot_files=()
+          skipped_pages=()
+          successful_pages=()
 
           while IFS='|' read -r NAME URL XPATH FILE_PATH; do
             [ -z "${NAME:-}" ] && continue
 
+            echo ""
             echo "Checking $NAME -> $FILE_PATH"
 
-            python page-diff/check_html.py \
+            # Python handles its own retries and backoff.
+            if python page-diff/check_html.py \
               --url "$URL" \
               --xpath "$XPATH" \
-              --file_path "$FILE_PATH"
+              --file_path "$FILE_PATH"; then
 
-            # If the file existed in HEAD, compare the updated working tree version to HEAD.
+              echo "Successfully fetched $NAME"
+              successful_pages+=("$NAME")
+
+            else
+              status=$?
+
+              if [ "$status" -eq 2 ]; then
+                echo "::warning::Skipped $NAME after failed fetch attempts"
+                skipped_pages+=("$NAME")
+                continue
+              else
+                echo "::error::Unexpected error checking $NAME (exit code $status)"
+                exit "$status"
+              fi
+            fi
+
+            # Compare updated snapshot against HEAD.
             if git cat-file -e "HEAD:$FILE_PATH" 2>/dev/null; then
+
               if ! git diff --quiet -- "$FILE_PATH"; then
                 real_change=true
                 changed_files+=("$FILE_PATH")
 
                 echo "Change detected for $NAME"
                 echo "Requesting Wayback Machine save for: $URL"
+
                 sleep 2
-                curl -sS -I "https://web.archive.org/save/${URL}" >/dev/null || true
+                curl -sS -I \
+                  --max-time 30 \
+                  "https://web.archive.org/save/${URL}" \
+                  >/dev/null || true
+              else
+                echo "No change detected for $NAME"
               fi
+
             else
               first_snapshot_files+=("$FILE_PATH")
               changed_files+=("$FILE_PATH")
 
               echo "Initial snapshot detected for $NAME"
               echo "Requesting Wayback Machine save for: $URL"
+
               sleep 2
-              curl -sS -I "https://web.archive.org/save/${URL}" >/dev/null || true
+              curl -sS -I \
+                --max-time 30 \
+                "https://web.archive.org/save/${URL}" \
+                >/dev/null || true
             fi
+
           done <<< "${PAGES}"
 
+          # Commit updated snapshots.
           if [ -n "$(git status --porcelain)" ]; then
             git config --local user.email "action@github.com"
             git config --local user.name "GitHub Action"
@@ -85,21 +120,46 @@ jobs:
             git add -A
 
             CHANGED=$(git diff --cached --name-only | tr '\n' ' ')
+
             if [ -n "$CHANGED" ]; then
               git commit -m "Page-diff: update snapshots: ${CHANGED}"
               git push
             fi
           fi
 
+          # GitHub Actions summary.
+          {
+            echo "## Page monitoring summary"
+            echo ""
+            echo "Successful checks: ${#successful_pages[@]}"
+            echo "Skipped pages: ${#skipped_pages[@]}"
+            echo ""
+
+            if [ "${#skipped_pages[@]}" -gt 0 ]; then
+              echo "### Skipped pages"
+              for page in "${skipped_pages[@]}"; do
+                echo "- $page"
+              done
+              echo ""
+              echo "Existing snapshots have been preserved."
+            fi
+
+            if [ "$real_change" = true ]; then
+              echo "### Changes detected"
+              for file in "${changed_files[@]}"; do
+                echo "- $file"
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Preserve failure notification for real changes.
           if [ "$real_change" = true ]; then
-            echo "Error: Real changes detected in: ${changed_files[*]}"
-            echo "Diff:"
-            git --no-pager diff -- "${changed_files[@]}" || true
+            echo "::error::Real changes detected in: ${changed_files[*]}"
             exit 1
           fi
 
           if [ "${#first_snapshot_files[@]}" -gt 0 ]; then
-            echo "Initial snapshot(s) detected for: ${first_snapshot_files[*]}. Not failing this run."
-          else
-            echo "No real changes detected."
+            echo "Initial snapshots created: ${first_snapshot_files[*]}"
           fi
+
+          echo "Page monitoring completed successfully."

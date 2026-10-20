@@ -1,4 +1,6 @@
 import requests
+import sys
+import time
 from lxml import html
 from lxml import etree 
 
@@ -16,23 +18,45 @@ XPATH = args.xpath
 FILE_PATH = args.file_path
 
 
-def fetch_html_by_xpath(url, xpath):
-    response = requests.get(url)
-    if response.status_code != 200:
-        raise Exception(
-            f"Failed to fetch {url}: "
-            f"HTTP {response.status_code}\n"
-            f"Response: {response.text[:500]}"
-        )
-    
-    tree = html.fromstring(response.content)
-    elements = tree.xpath(xpath)
-    
-    if len(elements) == 0:
-        raise Exception("No element found for the provided XPath")
-    
-    return etree.tostring(elements[0], pretty_print=True, method="html").decode('utf-8')
 
+def fetch_html_by_xpath(url, xpath):
+    for attempt in range(1, 4):
+        try:
+            response = requests.get(url, timeout=30)
+
+            if response.status_code != 200:
+                raise requests.HTTPError(
+                    f"HTTP {response.status_code}"
+                )
+
+            tree = html.fromstring(response.content)
+            elements = tree.xpath(xpath)
+
+            if not elements:
+                raise ValueError(
+                    "No element found for the provided XPath"
+                )
+
+            return etree.tostring(
+                elements[0],
+                pretty_print=True,
+                method="html"
+            ).decode("utf-8")
+
+        except requests.RequestException as exc:
+            print(
+                f"Attempt {attempt}/3 failed for {url}: {exc}",
+                flush=True
+            )
+
+            if attempt == 3:
+                print(
+                    f"Skipping {url} after 3 attempts",
+                    flush=True
+                )
+                sys.exit(2)
+
+            time.sleep(10 if attempt == 1 else 30)
 
 def write_html_to_disk(file_path, content):
     with open(file_path, 'w', encoding='utf-8') as f:
